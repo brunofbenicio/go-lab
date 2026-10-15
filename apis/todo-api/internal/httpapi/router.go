@@ -18,5 +18,6 @@ func NewRouter(store todo.Store) http.Handler {
 	mux.HandleFunc("POST /api/todos", api.createTodo)
 	mux.HandleFunc("GET /api/todos/{id}", api.getTodo)
 	mux.HandleFunc("PUT /api/todos/{id}", api.replaceTodo)
+	mux.HandleFunc("PATCH /api/todos/{id}", api.patchTodo)
 	return mux
 }

@@ -22,6 +22,9 @@ type Store interface {
 	List(ctx context.Context) ([]Todo, error)
 	// Replace overwrites the client-controlled fields of a Todo.
 	Replace(ctx context.Context, id int64, in Input) (Todo, error)
+	// Patch applies a partial update. The merged result is validated, so it
+	// can return a *ValidationError as well as ErrNotFound.
+	Patch(ctx context.Context, id int64, p Patch) (Todo, error)
 	// Delete removes a Todo or returns ErrNotFound.
 	Delete(ctx context.Context, id int64) error
 }
@@ -101,6 +104,32 @@ func (s *MemoryStore) Replace(_ context.Context, id int64, in Input) (Todo, erro
 	t, ok := s.items[id]
 	if !ok {
 		return Todo{}, ErrNotFound
+	}
+	t.Title = in.Title
+	t.Notes = in.Notes
+	t.Done = in.Done
+	t.DueDate = copyTime(in.DueDate)
+	t.UpdatedAt = s.now().UTC()
+	s.items[id] = t
+	return clone(t), nil
+}
+
+// Patch implements Store.
+func (s *MemoryStore) Patch(_ context.Context, id int64, p Patch) (Todo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.items[id]
+	if !ok {
+		return Todo{}, ErrNotFound
+	}
+	if p.IsEmpty() {
+		return clone(t), nil
+	}
+
+	in := p.Apply(t).Normalized()
+	if err := in.Validate(); err != nil {
+		return Todo{}, err
 	}
 	t.Title = in.Title
 	t.Notes = in.Notes
