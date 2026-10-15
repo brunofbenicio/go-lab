@@ -3,7 +3,7 @@ package todo
 import (
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -89,9 +89,16 @@ func (s *MemoryStore) List(_ context.Context, opts ListOptions) (ListResult, err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// Filter on the stored values but only remember the ids: that is all the
+	// ordering and paging below need, and it keeps the work proportional to
+	// the number of matches instead of copying every matching Todo.
 	query := strings.ToLower(strings.TrimSpace(opts.Query))
-	matched := make([]Todo, 0, len(s.items))
-	for _, t := range s.items {
+	capacity := 16 // filters usually match few items, grow on demand
+	if opts.Done == nil && query == "" {
+		capacity = len(s.items) // no filter: everything matches
+	}
+	matched := make([]int64, 0, capacity)
+	for id, t := range s.items {
 		if opts.Done != nil && t.Done != *opts.Done {
 			continue
 		}
@@ -100,9 +107,9 @@ func (s *MemoryStore) List(_ context.Context, opts ListOptions) (ListResult, err
 			!strings.Contains(strings.ToLower(t.Notes), query) {
 			continue
 		}
-		matched = append(matched, clone(t))
+		matched = append(matched, id)
 	}
-	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+	slices.Sort(matched)
 
 	total := len(matched)
 	start := min(max(opts.Offset, 0), total)
@@ -110,7 +117,13 @@ func (s *MemoryStore) List(_ context.Context, opts ListOptions) (ListResult, err
 	if opts.Limit > 0 {
 		end = min(start+opts.Limit, total)
 	}
-	return ListResult{Items: matched[start:end], Total: total}, nil
+
+	// Only the requested page is copied out of the store.
+	page := make([]Todo, 0, end-start)
+	for _, id := range matched[start:end] {
+		page = append(page, clone(s.items[id]))
+	}
+	return ListResult{Items: page, Total: total}, nil
 }
 
 // Replace implements Store.
