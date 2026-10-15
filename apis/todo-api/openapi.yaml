@@ -1,0 +1,553 @@
+openapi: 3.0.3
+info:
+  title: Todo API
+  version: 1.0.0
+  description: |
+    A small REST API for managing a todo list, written with the Go standard
+    library only.
+
+    * Reads are public. Anything that changes state (`POST`, `PUT`, `PATCH`,
+      `DELETE`) needs an API key when the server is started with
+      `TODO_API_KEYS`.
+    * Every response carries an `X-Request-ID` header that also appears in the
+      server logs.
+    * Errors always use the same envelope, see the `Error` schema.
+    * Clients are rate limited per IP address and receive `429` with a
+      `Retry-After` header when they exceed the limit.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: todos
+    description: Create, read, update and delete todos
+  - name: operations
+    description: Health and diagnostics
+paths:
+  /healthz:
+    get:
+      tags: [operations]
+      operationId: getHealth
+      summary: Liveness probe
+      description: Returns 200 while the process is able to serve requests.
+      responses:
+        '200':
+          description: The service is alive.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/todos:
+    get:
+      tags: [todos]
+      operationId: listTodos
+      summary: List todos
+      description: |
+        Returns todos ordered by id. Filters are applied first and paging
+        afterwards, so `total` always counts every match.
+      parameters:
+        - name: done
+          in: query
+          description: Keep only todos whose `done` flag matches.
+          schema:
+            type: boolean
+        - name: q
+          in: query
+          description: Case-insensitive text searched in the title and the notes.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of items to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          description: Number of matching items to skip.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: One page of todos.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            X-Total-Count:
+              $ref: '#/components/headers/TotalCount'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoList'
+              example:
+                items:
+                  - id: 1
+                    title: Ship the API
+                    notes: with swagger
+                    done: true
+                    due_date: '2026-12-31T10:00:00Z'
+                    created_at: '2026-10-15T14:26:55Z'
+                    updated_at: '2026-10-15T14:27:10Z'
+                total: 1
+                limit: 50
+                offset: 0
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      tags: [todos]
+      operationId: createTodo
+      summary: Create a todo
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TodoInput'
+            example:
+              title: Buy milk
+              notes: Two litres, semi-skimmed
+              due_date: '2026-11-01T09:00:00Z'
+      responses:
+        '201':
+          description: The todo was created.
+          headers:
+            Location:
+              description: Path of the new todo.
+              schema:
+                type: string
+                example: /api/todos/7
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Todo'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/todos/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TodoID'
+    get:
+      tags: [todos]
+      operationId: getTodo
+      summary: Get a todo
+      responses:
+        '200':
+          description: The requested todo.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Todo'
+        '400':
+          $ref: '#/components/responses/InvalidID'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    put:
+      tags: [todos]
+      operationId: replaceTodo
+      summary: Replace a todo
+      description: |
+        Replaces every client-controlled field. Fields left out of the body are
+        reset to their zero value, use `PATCH` for partial updates.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TodoInput'
+      responses:
+        '200':
+          description: The updated todo.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Todo'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    patch:
+      tags: [todos]
+      operationId: patchTodo
+      summary: Update part of a todo
+      description: |
+        Only the fields present in the body change. Send `"due_date": null` to
+        clear the due date. An empty object is accepted and changes nothing.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TodoPatch'
+            examples:
+              markDone:
+                summary: Mark as done
+                value:
+                  done: true
+              clearDueDate:
+                summary: Clear the due date
+                value:
+                  due_date: null
+      responses:
+        '200':
+          description: The updated todo.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Todo'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      tags: [todos]
+      operationId: deleteTodo
+      summary: Delete a todo
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - {}
+      responses:
+        '204':
+          description: The todo was deleted.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+        '400':
+          $ref: '#/components/responses/InvalidID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API key for write operations. Only enforced when the server is started
+        with `TODO_API_KEYS`.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: 'The same API key sent as `Authorization: Bearer <key>`.'
+  parameters:
+    TodoID:
+      name: id
+      in: path
+      required: true
+      description: Identifier of the todo, a positive integer.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 1
+  headers:
+    RequestID:
+      description: |
+        Identifier of the request. A well-formed `X-Request-ID` sent by the
+        client is echoed back, otherwise the server generates one.
+      schema:
+        type: string
+        example: 3f2b8c1de4a94f0f8a6d2c7b5e19a0c4
+    TotalCount:
+      description: Number of todos matching the filters, ignoring paging.
+      schema:
+        type: integer
+        example: 42
+  schemas:
+    Todo:
+      type: object
+      required: [id, title, done, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 7
+        title:
+          type: string
+          maxLength: 120
+          example: Buy milk
+        notes:
+          type: string
+          maxLength: 1000
+          example: Two litres, semi-skimmed
+        done:
+          type: boolean
+          example: false
+        due_date:
+          type: string
+          format: date-time
+          example: '2026-11-01T09:00:00Z'
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-15T14:26:55Z'
+        updated_at:
+          type: string
+          format: date-time
+          example: '2026-10-15T14:26:55Z'
+    TodoInput:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Required, counted in characters after trimming whitespace.
+        notes:
+          type: string
+          maxLength: 1000
+        done:
+          type: boolean
+          default: false
+        due_date:
+          type: string
+          format: date-time
+          nullable: true
+    TodoPatch:
+      type: object
+      additionalProperties: false
+      description: Every property is optional, omitted ones are left unchanged.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        notes:
+          type: string
+          maxLength: 1000
+        done:
+          type: boolean
+        due_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: Send null to clear the due date.
+    TodoList:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Todo'
+        total:
+          type: integer
+          description: Number of matches before paging.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable, machine-readable error code.
+              enum:
+                - invalid_json
+                - invalid_id
+                - invalid_query
+                - validation_failed
+                - unauthorized
+                - not_found
+                - payload_too_large
+                - unsupported_media_type
+                - rate_limited
+                - internal_error
+            message:
+              type: string
+              description: Human-readable explanation.
+            details:
+              type: array
+              description: One entry per invalid field, present for validation errors.
+              items:
+                type: object
+                required: [field, message]
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+  responses:
+    InvalidJSON:
+      description: The body is not valid JSON, has unknown fields or wrong types.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_json
+              message: malformed JSON at position 9
+    InvalidID:
+      description: The id in the path is not a positive integer.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_id
+              message: the todo id must be a positive integer
+    InvalidQuery:
+      description: A query parameter is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_query
+              message: one or more query parameters are invalid
+              details:
+                - field: limit
+                  message: must be an integer between 1 and 200
+    Unauthorized:
+      description: A valid API key is required for this operation.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            example: Bearer realm="todo-api"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthorized
+              message: a valid API key is required for this operation
+    NotFound:
+      description: The todo does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: todo 42 was not found
+    PayloadTooLarge:
+      description: The request body exceeds 1 MiB.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: The Content-Type must be application/json.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationFailed:
+      description: The body is well-formed JSON but breaks a business rule.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: validation_failed
+              message: the request body is invalid
+              details:
+                - field: title
+                  message: must not be empty
+    RateLimited:
+      description: Too many requests from this client.
+      headers:
+        Retry-After:
+          description: Seconds to wait before trying again.
+          schema:
+            type: integer
+            example: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: rate_limited
+              message: too many requests, slow down
