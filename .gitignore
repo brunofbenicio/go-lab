@@ -1,0 +1,10 @@
+# Binários e artefatos de teste
+*.exe
+*.test
+*.out
+coverage.*
+
+# Editores e sistema
+.idea/
+.vscode/
+.DS_Store
