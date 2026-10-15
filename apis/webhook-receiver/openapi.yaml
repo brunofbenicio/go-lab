@@ -1,0 +1,336 @@
+openapi: 3.0.3
+info:
+  title: Webhook Receiver API
+  version: 1.0.0
+  description: |
+    A webhook endpoint built to be safe by default. It authenticates every
+    delivery with an HMAC signature, refuses stale (replayed) requests, detects
+    deliveries that are retried and bounds the size of what it reads.
+
+    ## What a sender must do
+
+    Every request to `POST /webhooks` carries three headers:
+
+    | Header | Value |
+    |--------|-------|
+    | `X-Webhook-Id` | A unique ID for the delivery. A retry of the same delivery reuses it. |
+    | `X-Webhook-Timestamp` | The time of the attempt, as Unix seconds (`1740830400`). |
+    | `X-Webhook-Signature` | `sha256=` followed by the hex HMAC-SHA-256 of `<id>.<timestamp>.<body>`, keyed with the shared secret. |
+
+    The signed text is the three values joined by dots, with the body exactly
+    as sent. Signing the ID and the timestamp along with the body stops a
+    captured request from being replayed with a fresh timestamp or with a new ID.
+
+    ```sh
+    BODY='{"type":"order.created","data":{"id":42}}'
+    ID=evt_001
+    TS=$(date +%s)
+    SIG=$(printf '%s.%s.%s' "$ID" "$TS" "$BODY" \
+      | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | sed 's/^.* //')
+    curl -X POST http://localhost:8080/webhooks \
+      -H "Content-Type: application/json" \
+      -H "X-Webhook-Id: $ID" \
+      -H "X-Webhook-Timestamp: $TS" \
+      -H "X-Webhook-Signature: sha256=$SIG" \
+      -d "$BODY"
+    ```
+
+    ## How a delivery is processed
+
+    1. The body size limit is enforced (`413`).
+    2. The headers must be present (`401` for the signature, `400` for the rest).
+    3. The signature is verified in constant time (`401`).
+    4. The timestamp must be within the configured tolerance of the server's
+       clock, 5 minutes by default, in either direction (`401`, or `400` if it
+       is not a Unix time).
+    5. The body must be a JSON object with a valid `type` (`400`).
+    6. The delivery ID must not have been seen recently (`409`).
+    7. The event is processed and the answer is `202`. If processing fails the
+       answer is `500` and the delivery ID is forgotten, so the sender's retry is
+       processed.
+
+    Requests that fail authentication never consume a delivery ID.
+
+    ## Errors
+
+    Every error response is a JSON object with a stable, machine-readable
+    `code` and a human-readable `message`:
+
+    ```json
+    {"error": {"code": "invalid_signature", "message": "signature verification failed"}}
+    ```
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+tags:
+  - name: Webhooks
+    description: Receiving signed events.
+  - name: Documentation
+    description: The OpenAPI document and the interactive documentation page.
+paths:
+  /webhooks:
+    post:
+      tags: [Webhooks]
+      operationId: receiveWebhook
+      summary: Receive a signed event
+      description: |
+        Accepts one event. The request must be signed as described in the
+        introduction of this document; the interactive "Try it out" button
+        cannot compute that signature for you.
+
+        The body is limited to 64 KiB by default.
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookEvent'
+            examples:
+              withData:
+                summary: An event with a payload
+                value:
+                  type: order.created
+                  data:
+                    id: 42
+                    total: 99.9
+                    currency: USD
+              withoutData:
+                summary: An event without a payload
+                value:
+                  type: ping
+      responses:
+        '202':
+          description: The event was authenticated, validated and accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Accepted'
+              example:
+                status: accepted
+                id: evt_001
+        '400':
+          description: |
+            The request is authentic (or the problem does not depend on
+            authentication) but cannot be understood.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                missingHeader:
+                  summary: A required header is missing
+                  value:
+                    error:
+                      code: missing_header
+                      message: X-Webhook-Id header is required
+                invalidId:
+                  summary: Malformed delivery ID
+                  value:
+                    error:
+                      code: invalid_webhook_id
+                      message: "X-Webhook-Id must have 1 to 128 characters: letters, digits, '.', '_', ':' or '-'"
+                invalidTimestamp:
+                  summary: The timestamp is not Unix seconds
+                  value:
+                    error:
+                      code: invalid_timestamp
+                      message: X-Webhook-Timestamp must be a Unix time in seconds, such as 1740830400
+                invalidPayload:
+                  summary: The body is not an acceptable event
+                  value:
+                    error:
+                      code: invalid_payload
+                      message: 'field "type" is required'
+                notJson:
+                  summary: The body is not JSON
+                  value:
+                    error:
+                      code: invalid_payload
+                      message: request body is not valid JSON
+        '401':
+          description: |
+            The delivery could not be authenticated, or its timestamp is outside
+            the tolerance window. Signature failures all look the same on
+            purpose.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                missingSignature:
+                  summary: No signature header
+                  value:
+                    error:
+                      code: missing_signature
+                      message: X-Webhook-Signature header is required
+                invalidSignature:
+                  summary: Wrong secret, altered body, malformed header, ...
+                  value:
+                    error:
+                      code: invalid_signature
+                      message: signature verification failed
+                staleTimestamp:
+                  summary: Too old or too far in the future
+                  value:
+                    error:
+                      code: timestamp_out_of_tolerance
+                      message: "timestamp is too far from the current time; check the sender's clock or retry with a fresh signature"
+        '409':
+          description: A delivery with this ID was already received. The event is not processed again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: duplicate_delivery
+                  message: this delivery has already been received
+        '413':
+          description: The body is larger than the limit (64 KiB by default).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: payload_too_large
+                  message: request body must not exceed 65536 bytes
+        '500':
+          description: |
+            The event was valid but could not be processed. The delivery ID is
+            released, so retrying the same delivery is safe and expected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: processing_failed
+                  message: the event could not be processed; retry the delivery
+  /openapi.yaml:
+    get:
+      tags: [Documentation]
+      operationId: getOpenAPI
+      summary: Get this OpenAPI document
+      responses:
+        '200':
+          description: The OpenAPI 3.0.3 document in YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /docs:
+    get:
+      tags: [Documentation]
+      operationId: getDocs
+      summary: Interactive documentation
+      description: A Swagger UI page that renders this document. The browser loads the UI assets from a public CDN.
+      responses:
+        '200':
+          description: The Swagger UI page.
+          content:
+            text/html:
+              schema:
+                type: string
+components:
+  parameters:
+    WebhookId:
+      name: X-Webhook-Id
+      in: header
+      required: true
+      description: |
+        Unique ID of the delivery, 1 to 128 characters: letters, digits, `.`,
+        `_`, `:` and `-`, starting with a letter or a digit. Retries of one
+        delivery reuse the same ID; the receiver uses it to detect duplicates.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9][A-Za-z0-9_.:-]*$'
+        example: evt_001
+    WebhookTimestamp:
+      name: X-Webhook-Timestamp
+      in: header
+      required: true
+      description: |
+        When the attempt was made, as Unix time in whole seconds (not
+        milliseconds). It must be within the receiver's tolerance (5 minutes by
+        default) of the receiver's clock. Each attempt of a retried delivery
+        should carry a fresh timestamp and a fresh signature.
+      schema:
+        type: string
+        pattern: '^[0-9]{1,12}$'
+        example: '1740830400'
+    WebhookSignature:
+      name: X-Webhook-Signature
+      in: header
+      required: true
+      description: |
+        `sha256=` followed by the lowercase hex HMAC-SHA-256 of
+        `<id>.<timestamp>.<body>`, keyed with the shared secret.
+      schema:
+        type: string
+        pattern: '^sha256=[0-9a-fA-F]{64}$'
+        example: sha256=40694aff0c74a1ed4e8ad03fca5bd67aee0eb3559662c6f92cf607e10e6bf097
+  schemas:
+    WebhookEvent:
+      type: object
+      required: [type]
+      description: Unknown top-level fields are accepted and ignored, so senders can evolve their payloads.
+      properties:
+        type:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '^[a-z0-9][a-z0-9._-]*$'
+          description: What happened, in lowercase, for example `order.created`.
+          example: order.created
+        data:
+          description: The event payload. Any JSON value; `null` counts as absent.
+          example:
+            id: 42
+    Accepted:
+      type: object
+      required: [status, id]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+          example: accepted
+        id:
+          type: string
+          description: The delivery ID that was accepted.
+          example: evt_001
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable identifier of the error, meant for programs.
+              enum:
+                - missing_signature
+                - invalid_signature
+                - timestamp_out_of_tolerance
+                - missing_header
+                - invalid_webhook_id
+                - invalid_timestamp
+                - invalid_payload
+                - duplicate_delivery
+                - payload_too_large
+                - processing_failed
+              example: invalid_signature
+            message:
+              type: string
+              description: Explanation meant for people. Its wording may change.
+              example: signature verification failed
