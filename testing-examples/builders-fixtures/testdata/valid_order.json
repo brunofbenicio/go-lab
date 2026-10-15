@@ -1,0 +1,10 @@
+{
+  "id": "ord-2041",
+  "customer": "customer@example.com",
+  "lines": [
+    {"sku": "notebook", "quantity": 3, "price": 2000},
+    {"sku": "backpack", "quantity": 1, "price": 3000}
+  ],
+  "coupon": "SAVE10",
+  "ship": {"street": "221 Example Ave", "city": "Sao Paulo", "country": "BR"}
+}
