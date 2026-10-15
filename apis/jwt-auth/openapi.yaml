@@ -1,0 +1,451 @@
+openapi: 3.0.3
+info:
+  title: JWT Auth API
+  version: 1.0.0
+  description: |
+    A small authentication API: users register with an e-mail and a password,
+    log in to receive a short-lived JSON Web Token and use it as a bearer token
+    on protected routes.
+
+    ## How it works
+
+    1. `POST /auth/register` creates an account. Passwords are stored as
+       PBKDF2-HMAC-SHA-256 hashes with a random salt, never in clear text.
+    2. `POST /auth/login` checks the credentials and returns an `access_token`
+       signed with HS256. The token carries the user ID (`sub`), a unique ID
+       (`jti`), the issue time (`iat`) and the expiration time (`exp`).
+    3. Protected routes expect the header `Authorization: Bearer <access_token>`.
+
+    ## Security notes
+
+    - Tokens signed with any algorithm other than HS256, including `none`, are
+      rejected.
+    - Tokens without an expiration time are rejected.
+    - Login answers the same way for a wrong password and for an unknown e-mail,
+      and spends the same effort in both cases.
+    - Tokens are not revocable: they stay valid until `exp`.
+
+    ## Errors
+
+    Every error response is a JSON object with a stable, machine-readable
+    `code` and a human-readable `message`:
+
+    ```json
+    {"error": {"code": "invalid_credentials", "message": "invalid email or password"}}
+    ```
+
+    Responses to `401` also carry a `WWW-Authenticate` challenge (RFC 6750).
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+tags:
+  - name: Authentication
+    description: Creating accounts and obtaining tokens.
+  - name: Account
+    description: Routes that require a bearer token.
+  - name: Documentation
+    description: The OpenAPI document and the interactive documentation page.
+paths:
+  /auth/register:
+    post:
+      tags: [Authentication]
+      operationId: register
+      summary: Create an account
+      description: |
+        E-mails are compared case-insensitively and surrounding whitespace is
+        ignored. The response never includes the password or its hash.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              full:
+                summary: With a display name
+                value:
+                  email: alice@example.com
+                  password: correct horse battery staple
+                  name: Alice Liddell
+              minimal:
+                summary: Without a display name
+                value:
+                  email: bob@example.com
+                  password: 12345678
+      responses:
+        '201':
+          description: The account was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                id: 3f1c8a7e5b2d4c9a8e6f0b1d2c3a4e5f
+                email: alice@example.com
+                name: Alice Liddell
+                created_at: '2025-03-01T12:00:00Z'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '409':
+          description: Another account already uses this e-mail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: email_taken
+                  message: an account with this email already exists
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: A field was rejected. The first invalid field is reported.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                invalidEmail:
+                  summary: Invalid e-mail
+                  value:
+                    error:
+                      code: invalid_email
+                      message: email must be a valid address of up to 254 characters
+                invalidPassword:
+                  summary: Password too short or too long
+                  value:
+                    error:
+                      code: invalid_password
+                      message: password must have between 8 and 128 characters
+                invalidName:
+                  summary: Name too long or with control characters
+                  value:
+                    error:
+                      code: invalid_name
+                      message: name must have at most 100 characters and no control characters
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: Log in and obtain an access token
+      description: |
+        Exchanges an e-mail and a password for a bearer token. A wrong password
+        and an unknown e-mail produce the same `401` response.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: alice@example.com
+              password: correct horse battery staple
+      responses:
+        '200':
+          description: The credentials are valid.
+          headers:
+            Cache-Control:
+              description: Always `no-store`; the response carries a credential.
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                access_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhdXRoLmV4YW1wbGUuY29tIiwic3ViIjoiM2YxYzhhN2U1YjJkNGM5YThlNmYwYjFkMmMzYTRlNWYiLCJpYXQiOjE3NDA4MzA0MDAsImV4cCI6MTc0MDgzMTMwMCwianRpIjoiOGMxZTRmN2EyYjlkNGU2ZiJ9.ZXhhbXBsZS1zaWduYXR1cmUtbm90LXZhbGlk
+                token_type: Bearer
+                expires_in: 900
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '401':
+          description: The e-mail or the password is wrong.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_credentials
+                  message: invalid email or password
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: The e-mail or the password is missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: missing_credentials
+                  message: email and password are required
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me:
+    get:
+      tags: [Account]
+      operationId: getMe
+      summary: Get the authenticated user
+      description: Returns the account that owns the bearer token.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                id: 3f1c8a7e5b2d4c9a8e6f0b1d2c3a4e5f
+                email: alice@example.com
+                name: Alice Liddell
+                created_at: '2025-03-01T12:00:00Z'
+        '401':
+          description: |
+            The token is missing, malformed, invalid or expired. The
+            `WWW-Authenticate` header carries the matching challenge.
+          headers:
+            WWW-Authenticate:
+              description: Bearer challenge (RFC 6750).
+              schema:
+                type: string
+                example: Bearer realm="api", error="invalid_token", error_description="token expired"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                missing:
+                  summary: No Authorization header
+                  value:
+                    error:
+                      code: missing_token
+                      message: authorization header is required
+                malformedHeader:
+                  summary: Not a "Bearer <token>" header
+                  value:
+                    error:
+                      code: invalid_request
+                      message: authorization header must have the form 'Bearer <token>'
+                invalid:
+                  summary: Bad signature, wrong algorithm or unknown user
+                  value:
+                    error:
+                      code: invalid_token
+                      message: token is invalid
+                expired:
+                  summary: The token's exp has passed
+                  value:
+                    error:
+                      code: token_expired
+                      message: token has expired
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /openapi.yaml:
+    get:
+      tags: [Documentation]
+      operationId: getOpenAPI
+      summary: Get this OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI 3.0.3 document in YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /docs:
+    get:
+      tags: [Documentation]
+      operationId: getDocs
+      summary: Interactive documentation
+      description: A Swagger UI page that renders this document. The browser loads the UI assets from a public CDN.
+      security: []
+      responses:
+        '200':
+          description: The Swagger UI page.
+          content:
+            text/html:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The `access_token` returned by `POST /auth/login`.
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: A bare address such as `alice@example.com`. Display names are not accepted.
+          example: alice@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+          description: Between 8 and 128 characters.
+          example: correct horse battery staple
+        name:
+          type: string
+          maxLength: 100
+          description: Optional display name, without control characters.
+          example: Alice Liddell
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          format: password
+          example: correct horse battery staple
+    User:
+      type: object
+      required: [id, email, created_at]
+      properties:
+        id:
+          type: string
+          description: Opaque identifier of the account.
+          example: 3f1c8a7e5b2d4c9a8e6f0b1d2c3a4e5f
+        email:
+          type: string
+          format: email
+          description: The normalized (lowercase) e-mail.
+          example: alice@example.com
+        name:
+          type: string
+          description: Present only when a display name was given.
+          example: Alice Liddell
+        created_at:
+          type: string
+          format: date-time
+          example: '2025-03-01T12:00:00Z'
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: 'A signed JWT (HS256). Send it as `Authorization: Bearer <access_token>`.'
+        token_type:
+          type: string
+          enum: [Bearer]
+          example: Bearer
+        expires_in:
+          type: integer
+          format: int64
+          description: Lifetime of the token, in seconds.
+          example: 900
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable identifier of the error, meant for programs.
+              enum:
+                - invalid_json
+                - unsupported_media_type
+                - payload_too_large
+                - invalid_email
+                - invalid_password
+                - invalid_name
+                - missing_credentials
+                - email_taken
+                - invalid_credentials
+                - missing_token
+                - invalid_request
+                - invalid_token
+                - token_expired
+                - internal_error
+              example: invalid_credentials
+            message:
+              type: string
+              description: Explanation meant for people. Its wording may change.
+              example: invalid email or password
+  responses:
+    InvalidJSON:
+      description: The request body is not a valid JSON object.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            malformed:
+              summary: Malformed JSON
+              value:
+                error:
+                  code: invalid_json
+                  message: request body is not valid JSON
+            unknownField:
+              summary: Unknown field
+              value:
+                error:
+                  code: invalid_json
+                  message: 'unknown field "admin"'
+            wrongType:
+              summary: Wrong type
+              value:
+                error:
+                  code: invalid_json
+                  message: field "email" has the wrong type
+    PayloadTooLarge:
+      description: The request body is larger than 4 KiB.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: payload_too_large
+              message: request body must not exceed 4 KiB
+    UnsupportedMediaType:
+      description: The `Content-Type` header is missing or is not `application/json`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unsupported_media_type
+              message: Content-Type must be application/json
+    InternalError:
+      description: Unexpected server failure. Details are logged, never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: internal_error
+              message: internal server error
