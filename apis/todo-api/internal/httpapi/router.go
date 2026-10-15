@@ -4,6 +4,8 @@ package httpapi
 import (
 	"net/http"
 
+	todoapi "github.com/brunofbenicio/go-lab/apis/todo-api"
+	"github.com/brunofbenicio/go-lab/apis/todo-api/internal/docs"
 	"github.com/brunofbenicio/go-lab/apis/todo-api/internal/todo"
 )
 
@@ -13,6 +15,7 @@ func NewRouter(store todo.Store) http.Handler {
 	api := &API{store: store}
 
 	mux := http.NewServeMux()
+	docs.Register(mux, todoapi.Spec)
 	mux.HandleFunc("GET /healthz", handleHealth)
 	mux.HandleFunc("GET /api/todos", api.listTodos)
 	mux.HandleFunc("POST /api/todos", api.createTodo)
