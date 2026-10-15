@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds the runtime settings of the server.
@@ -23,6 +24,9 @@ type Config struct {
 	RateLimitRPS float64
 	// RateLimitBurst is how many requests a client may send at once.
 	RateLimitBurst int
+	// ShutdownTimeout is how long in-flight requests get to finish after a
+	// termination signal.
+	ShutdownTimeout time.Duration
 }
 
 const (
@@ -31,6 +35,8 @@ const (
 	defaultRateRPS    = 20
 	defaultRateBurst  = 40
 	defaultCORSOrigin = "*"
+
+	defaultShutdownTimeout = 10 * time.Second
 )
 
 // Load reads the settings through getenv (usually os.Getenv), applying
@@ -42,13 +48,15 @@ const (
 //	CORS_ORIGINS      comma-separated allowed origins (default *)
 //	RATE_LIMIT_RPS    requests per second per client, > 0 (default 20)
 //	RATE_LIMIT_BURST  burst size per client, >= 1 (default 40)
+//	SHUTDOWN_TIMEOUT  graceful shutdown budget, a Go duration like 15s (default 10s)
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		Port:           defaultPort,
-		LogLevel:       defaultLogLevel,
-		CORSOrigins:    []string{defaultCORSOrigin},
-		RateLimitRPS:   defaultRateRPS,
-		RateLimitBurst: defaultRateBurst,
+		Port:            defaultPort,
+		LogLevel:        defaultLogLevel,
+		CORSOrigins:     []string{defaultCORSOrigin},
+		RateLimitRPS:    defaultRateRPS,
+		RateLimitBurst:  defaultRateBurst,
+		ShutdownTimeout: defaultShutdownTimeout,
 	}
 
 	if raw := strings.TrimSpace(getenv("PORT")); raw != "" {
@@ -88,6 +96,14 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("config: RATE_LIMIT_BURST must be an integer greater than or equal to 1, got %q", raw)
 		}
 		cfg.RateLimitBurst = burst
+	}
+
+	if raw := strings.TrimSpace(getenv("SHUTDOWN_TIMEOUT")); raw != "" {
+		timeout, err := time.ParseDuration(raw)
+		if err != nil || timeout <= 0 {
+			return Config{}, fmt.Errorf("config: SHUTDOWN_TIMEOUT must be a positive duration such as 15s, got %q", raw)
+		}
+		cfg.ShutdownTimeout = timeout
 	}
 
 	return cfg, nil
