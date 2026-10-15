@@ -10,6 +10,7 @@ import (
 
 	"github.com/brunofbenicio/go-lab/apis/todo-api/internal/config"
 	"github.com/brunofbenicio/go-lab/apis/todo-api/internal/httpapi"
+	"github.com/brunofbenicio/go-lab/apis/todo-api/internal/todo"
 )
 
 func main() {
@@ -20,7 +21,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           httpapi.NewRouter(),
+		Handler:           httpapi.NewRouter(todo.NewMemoryStore()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

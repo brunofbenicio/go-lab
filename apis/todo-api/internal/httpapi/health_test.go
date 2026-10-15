@@ -19,7 +19,7 @@ func TestHealth(t *testing.T) {
 		{name: "post is rejected", method: http.MethodPost, wantStatus: http.StatusMethodNotAllowed},
 	}
 
-	router := NewRouter()
+	router := newTestRouter(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "/healthz", nil)
