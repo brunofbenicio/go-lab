@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func env(values map[string]string) func(string) string {
@@ -13,6 +14,7 @@ func env(values map[string]string) func(string) string {
 func TestLoad(t *testing.T) {
 	defaults := Config{
 		Port: 8080, LogLevel: "info", CORSOrigins: []string{"*"}, RateLimitRPS: 20, RateLimitBurst: 40,
+		ShutdownTimeout: 10 * time.Second,
 	}
 
 	tests := []struct {
@@ -29,6 +31,10 @@ func TestLoad(t *testing.T) {
 		{name: "cors origins", env: map[string]string{"CORS_ORIGINS": "https://a.example.com, https://b.example.com"}, mutate: func(c *Config) { c.CORSOrigins = []string{"https://a.example.com", "https://b.example.com"} }},
 		{name: "blank cors origins keep the default", env: map[string]string{"CORS_ORIGINS": " , "}, mutate: func(*Config) {}},
 		{name: "rate limit", env: map[string]string{"RATE_LIMIT_RPS": "2.5", "RATE_LIMIT_BURST": "7"}, mutate: func(c *Config) { c.RateLimitRPS = 2.5; c.RateLimitBurst = 7 }},
+		{name: "shutdown timeout", env: map[string]string{"SHUTDOWN_TIMEOUT": "1m30s"}, mutate: func(c *Config) { c.ShutdownTimeout = 90 * time.Second }},
+		{name: "shutdown timeout without unit", env: map[string]string{"SHUTDOWN_TIMEOUT": "30"}, wantErr: true},
+		{name: "shutdown timeout zero", env: map[string]string{"SHUTDOWN_TIMEOUT": "0s"}, wantErr: true},
+		{name: "shutdown timeout negative", env: map[string]string{"SHUTDOWN_TIMEOUT": "-5s"}, wantErr: true},
 		{name: "port not a number", env: map[string]string{"PORT": "abc"}, wantErr: true},
 		{name: "port too low", env: map[string]string{"PORT": "0"}, wantErr: true},
 		{name: "port too high", env: map[string]string{"PORT": "70000"}, wantErr: true},
