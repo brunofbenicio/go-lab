@@ -1,0 +1,5 @@
+# Picked up by BuildKit (the default builder) when building with
+# `-f apis/todo-api/Dockerfile`: send only what the Dockerfile copies.
+*
+!go.mod
+!apis/todo-api/
