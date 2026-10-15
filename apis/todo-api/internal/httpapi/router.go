@@ -14,6 +14,7 @@ func NewRouter(store todo.Store) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealth)
+	mux.HandleFunc("GET /api/todos", api.listTodos)
 	mux.HandleFunc("POST /api/todos", api.createTodo)
 	mux.HandleFunc("GET /api/todos/{id}", api.getTodo)
 	return mux
