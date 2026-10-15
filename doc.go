@@ -1,5 +1,5 @@
-// Package golab é a raiz do laboratório de estudos em Go.
+// Package golab is the root of the Go lab.
 //
-// Os exercícios ficam em exercises/NNN-nome, cada um como um pacote
-// independente com seus próprios testes.
+// The examples live under apis/, pkg/, testing-examples/, exercises/ and
+// cmd/. Each one is an independent package with its own tests.
 package golab
