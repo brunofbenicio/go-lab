@@ -26,14 +26,18 @@ func Logging(logger *slog.Logger) Middleware {
 				level = slog.LevelWarn
 			}
 
-			logger.LogAttrs(r.Context(), level, "request completed",
+			attrs := []slog.Attr{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.Int("status", status),
 				slog.Int("bytes", sw.bytes),
 				slog.Duration("duration", time.Since(start)),
 				slog.String("remote_addr", r.RemoteAddr),
-			)
+			}
+			if id := RequestIDFrom(r.Context()); id != "" {
+				attrs = append(attrs, slog.String("request_id", id))
+			}
+			logger.LogAttrs(r.Context(), level, "request completed", attrs...)
 		})
 	}
 }
