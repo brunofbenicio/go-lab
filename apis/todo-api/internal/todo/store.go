@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,8 +19,8 @@ type Store interface {
 	Create(ctx context.Context, in Input) (Todo, error)
 	// Get returns the Todo with the given ID or ErrNotFound.
 	Get(ctx context.Context, id int64) (Todo, error)
-	// List returns every Todo ordered by ID.
-	List(ctx context.Context) ([]Todo, error)
+	// List returns the todos matching opts, ordered by ID.
+	List(ctx context.Context, opts ListOptions) (ListResult, error)
 	// Replace overwrites the client-controlled fields of a Todo.
 	Replace(ctx context.Context, id int64, in Input) (Todo, error)
 	// Patch applies a partial update. The merged result is validated, so it
@@ -84,16 +85,32 @@ func (s *MemoryStore) Get(_ context.Context, id int64) (Todo, error) {
 }
 
 // List implements Store.
-func (s *MemoryStore) List(_ context.Context) ([]Todo, error) {
+func (s *MemoryStore) List(_ context.Context, opts ListOptions) (ListResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]Todo, 0, len(s.items))
+	query := strings.ToLower(strings.TrimSpace(opts.Query))
+	matched := make([]Todo, 0, len(s.items))
 	for _, t := range s.items {
-		out = append(out, clone(t))
+		if opts.Done != nil && t.Done != *opts.Done {
+			continue
+		}
+		if query != "" &&
+			!strings.Contains(strings.ToLower(t.Title), query) &&
+			!strings.Contains(strings.ToLower(t.Notes), query) {
+			continue
+		}
+		matched = append(matched, clone(t))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+
+	total := len(matched)
+	start := min(max(opts.Offset, 0), total)
+	end := total
+	if opts.Limit > 0 {
+		end = min(start+opts.Limit, total)
+	}
+	return ListResult{Items: matched[start:end], Total: total}, nil
 }
 
 // Replace implements Store.

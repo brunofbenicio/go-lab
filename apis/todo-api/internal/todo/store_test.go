@@ -76,12 +76,12 @@ func TestMemoryStoreListIsOrderedByID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.List(ctx)
+	got, err := s.List(ctx, ListOptions{})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
-		t.Errorf("List() = %+v, want IDs [1 3]", got)
+	if len(got.Items) != 2 || got.Items[0].ID != 1 || got.Items[1].ID != 3 || got.Total != 2 {
+		t.Errorf("List() = %+v, want IDs [1 3] and total 2", got)
 	}
 }
 
