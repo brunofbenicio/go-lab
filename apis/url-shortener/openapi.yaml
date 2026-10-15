@@ -1,0 +1,434 @@
+openapi: 3.0.3
+info:
+  title: URL Shortener API
+  version: 1.0.0
+  description: |
+    A small URL shortener. It turns long URLs into short codes, redirects
+    visitors to the original destination and keeps simple usage counters.
+
+    ## Behavior
+
+    - Only absolute `http` and `https` URLs are accepted, up to 2048
+      characters, without embedded credentials.
+    - Codes are random, 7 characters long and made of the characters
+      `0-9`, `A-Z` and `a-z`.
+    - A link can be given a lifetime (`ttl_seconds`). Once it has expired the
+      redirect answers `410 Gone`, while the statistics remain available.
+    - Every successful redirect increments the hit counter of the link.
+
+    ## Errors
+
+    Every error response is a JSON object with a stable, machine-readable
+    `code` and a human-readable `message`:
+
+    ```json
+    {"error": {"code": "invalid_url", "message": "invalid URL: scheme must be http or https"}}
+    ```
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+tags:
+  - name: Links
+    description: Creating short links and reading their statistics.
+  - name: Redirect
+    description: Following a short link.
+  - name: Documentation
+    description: The OpenAPI document and the interactive documentation page.
+paths:
+  /api/links:
+    post:
+      tags: [Links]
+      operationId: createLink
+      summary: Create a short link
+      description: |
+        Validates the destination URL, draws a unique code and stores the
+        link. When the drawn code is already taken, another one is drawn
+        automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLinkRequest'
+            examples:
+              permanent:
+                summary: A link that never expires
+                value:
+                  url: https://example.com/articles/2025/a-very-long-article-title?utm_source=newsletter
+              temporary:
+                summary: A link that expires in one hour
+                value:
+                  url: https://example.com/promo
+                  ttl_seconds: 3600
+      responses:
+        '201':
+          description: The link was created.
+          headers:
+            Location:
+              description: Absolute URL of the statistics of the new link.
+              schema:
+                type: string
+                format: uri
+                example: http://localhost:8080/api/links/aB3dE9x/stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Link'
+              examples:
+                permanent:
+                  summary: Link without expiry
+                  value:
+                    code: aB3dE9x
+                    short_url: http://localhost:8080/aB3dE9x
+                    url: https://example.com/articles/2025/a-very-long-article-title?utm_source=newsletter
+                    created_at: '2025-03-01T12:00:00Z'
+                temporary:
+                  summary: Link with expiry
+                  value:
+                    code: Qw7Zk2m
+                    short_url: http://localhost:8080/Qw7Zk2m
+                    url: https://example.com/promo
+                    created_at: '2025-03-01T12:00:00Z'
+                    expires_at: '2025-03-01T13:00:00Z'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: The body is valid JSON but a value was rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                invalidUrl:
+                  summary: Unsupported URL scheme
+                  value:
+                    error:
+                      code: invalid_url
+                      message: 'invalid URL: scheme must be http or https'
+                credentials:
+                  summary: URL with embedded credentials
+                  value:
+                    error:
+                      code: invalid_url
+                      message: 'invalid URL: credentials are not allowed'
+                invalidTtl:
+                  summary: Non-positive lifetime
+                  value:
+                    error:
+                      code: invalid_ttl
+                      message: ttl_seconds must be a positive integer
+                ttlTooLong:
+                  summary: Lifetime above the one-year limit
+                  value:
+                    error:
+                      code: invalid_ttl
+                      message: 'invalid TTL: must not exceed 8760h0m0s'
+        '503':
+          description: Every candidate code collided with an existing link. Retrying is safe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: code_generation_failed
+                  message: could not generate a unique code, please try again
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/links/{code}/stats:
+    get:
+      tags: [Links]
+      operationId: getLinkStats
+      summary: Get the statistics of a link
+      description: |
+        Returns the destination, the lifetime and the usage counters of a link.
+        Reading the statistics does not count as a hit. Expired links keep their
+        statistics and are flagged with `expired: true`.
+      parameters:
+        - $ref: '#/components/parameters/Code'
+      responses:
+        '200':
+          description: The statistics of the link.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkStats'
+              examples:
+                neverFollowed:
+                  summary: A link nobody has followed yet
+                  value:
+                    code: aB3dE9x
+                    url: https://example.com/articles/2025/a-very-long-article-title
+                    created_at: '2025-03-01T12:00:00Z'
+                    hits: 0
+                    expired: false
+                followed:
+                  summary: A followed link that has already expired
+                  value:
+                    code: Qw7Zk2m
+                    url: https://example.com/promo
+                    created_at: '2025-03-01T12:00:00Z'
+                    expires_at: '2025-03-01T13:00:00Z'
+                    hits: 42
+                    last_access_at: '2025-03-01T12:58:10Z'
+                    expired: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /{code}:
+    get:
+      tags: [Redirect]
+      operationId: followLink
+      summary: Redirect to the original URL
+      description: |
+        Answers `302 Found` with the destination in the `Location` header and
+        counts one hit. The response is never cacheable so that every visit
+        reaches the server.
+      parameters:
+        - $ref: '#/components/parameters/Code'
+      responses:
+        '302':
+          description: Redirect to the original URL.
+          headers:
+            Location:
+              description: The original URL.
+              schema:
+                type: string
+                format: uri
+                example: https://example.com/articles/2025/a-very-long-article-title
+            Cache-Control:
+              description: Always `no-store`.
+              schema:
+                type: string
+                example: no-store
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: The link existed but its lifetime is over.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: link_expired
+                  message: this link has expired
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /openapi.yaml:
+    get:
+      tags: [Documentation]
+      operationId: getOpenAPI
+      summary: Get this OpenAPI document
+      responses:
+        '200':
+          description: The OpenAPI 3.0.3 document in YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /docs:
+    get:
+      tags: [Documentation]
+      operationId: getDocs
+      summary: Interactive documentation
+      description: A Swagger UI page that renders this document. The browser loads the UI assets from a public CDN.
+      responses:
+        '200':
+          description: The Swagger UI page.
+          content:
+            text/html:
+              schema:
+                type: string
+components:
+  parameters:
+    Code:
+      name: code
+      in: path
+      required: true
+      description: The short code of the link.
+      schema:
+        type: string
+        pattern: '^[0-9A-Za-z]{5,10}$'
+        example: aB3dE9x
+  schemas:
+    CreateLinkRequest:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Absolute `http` or `https` destination. Embedded credentials are rejected.
+          example: https://example.com/articles/2025/a-very-long-article-title
+        ttl_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 31536000
+          description: How many seconds the link stays valid. Omit it for a link that never expires.
+          example: 3600
+    Link:
+      type: object
+      required: [code, short_url, url, created_at]
+      properties:
+        code:
+          type: string
+          description: The short code assigned to the link.
+          example: aB3dE9x
+        short_url:
+          type: string
+          format: uri
+          description: The full short URL, ready to be shared.
+          example: http://localhost:8080/aB3dE9x
+        url:
+          type: string
+          format: uri
+          description: The original destination.
+          example: https://example.com/articles/2025/a-very-long-article-title
+        created_at:
+          type: string
+          format: date-time
+          example: '2025-03-01T12:00:00Z'
+        expires_at:
+          type: string
+          format: date-time
+          description: Present only when the link has a lifetime.
+          example: '2025-03-01T13:00:00Z'
+    LinkStats:
+      type: object
+      required: [code, url, created_at, hits, expired]
+      properties:
+        code:
+          type: string
+          example: aB3dE9x
+        url:
+          type: string
+          format: uri
+          description: The original destination.
+          example: https://example.com/articles/2025/a-very-long-article-title
+        created_at:
+          type: string
+          format: date-time
+          example: '2025-03-01T12:00:00Z'
+        expires_at:
+          type: string
+          format: date-time
+          description: Present only when the link has a lifetime.
+          example: '2025-03-01T13:00:00Z'
+        hits:
+          type: integer
+          format: int64
+          minimum: 0
+          description: How many times the link has been followed.
+          example: 42
+        last_access_at:
+          type: string
+          format: date-time
+          description: Present only when the link has been followed at least once.
+          example: '2025-03-01T12:58:10Z'
+        expired:
+          type: boolean
+          description: Whether the link is already past its lifetime.
+          example: false
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable identifier of the error, meant for programs.
+              enum:
+                - invalid_json
+                - unsupported_media_type
+                - payload_too_large
+                - invalid_url
+                - invalid_ttl
+                - not_found
+                - link_expired
+                - code_generation_failed
+                - internal_error
+              example: not_found
+            message:
+              type: string
+              description: Explanation meant for people. Its wording may change.
+              example: link not found
+  responses:
+    InvalidJSON:
+      description: The request body is not a valid JSON object.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            malformed:
+              summary: Malformed JSON
+              value:
+                error:
+                  code: invalid_json
+                  message: request body is not valid JSON
+            unknownField:
+              summary: Unknown field
+              value:
+                error:
+                  code: invalid_json
+                  message: 'unknown field "color"'
+            wrongType:
+              summary: Wrong type
+              value:
+                error:
+                  code: invalid_json
+                  message: field "url" has the wrong type
+    PayloadTooLarge:
+      description: The request body is larger than 8 KiB.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: payload_too_large
+              message: request body must not exceed 8 KiB
+    UnsupportedMediaType:
+      description: The `Content-Type` header is missing or is not `application/json`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unsupported_media_type
+              message: Content-Type must be application/json
+    NotFound:
+      description: No link exists for the code, or the code is malformed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: link not found
+    InternalError:
+      description: Unexpected server failure. Details are logged, never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: internal_error
+              message: internal server error
